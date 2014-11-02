@@ -17,7 +17,9 @@ options(width=85)
 ```
 
 ```{r initialize, , include=TRUE, message=FALSE}
-filepath<-"~/github/Rcommands/"
+setwd("/Users/mrp/Documents/GitHub/Energy/")
+# filepath<-"~/github/Rcommands/" ## This was the original file path, i will modify slightly
+
 
 ## read-in csv files from NRLDC html data scapring (Chris Tan and Myf March 2014)
 options(stringsAsFactors=FALSE)
@@ -31,6 +33,14 @@ library(ggplot2)  # plots
 library(scales)   # used in ggplot()
 library(xlsx)     # read excel files
 library(sm)       # density plots
+
+require(ggmap)
+require(FNN)
+require(gridExtra)
+require(plyr)
+
+
+
 
 load("growth.rsav")         # 5-yr average population growth in cities w. pop > 750k (as reported)
 load("growth.melt.rsav")    # "" melted
@@ -471,3 +481,99 @@ A Global Survey
 This study presents an empirical analysis of diurnal-to-seasonal energy use patterns for XX global cities...
 
 ### Methods and Materials
+
+
+### Downloading and processing NOAA weather station data in R
+
+The National Oceanic and Atmospheric Administration (NOAA) offers a variety of free meteorological/climatological information through their data portal, the National Climatic Data Center (NCDC).  The data is available for download at the Online Climate Data Directory. It is possible to downlaod data directly from the website, however it is also available via FTP, which is much more effecient, and is the method we'll be using here.
+
+The root directory for each year's data is: [ftp://ftp.ncdc.noaa.gov/pub/data/noaa/](ftp://ftp.ncdc.noaa.gov/pub/data/noaa/).  It is also where the list of weather stations is held. The current list of weather stations can be found in a file called `isd-history.txt` or `isd-history.csv`.  In the following example we will be using the .csv file. 
+
+First, set the working directory you would like to download the weather station data to.  Then we'll download the list of weather stations and load it into R. 
+
+```{r NOAA: d/l weather stations, echo=TRUE}
+
+setwd("/Users/mrp/Documents/Columbia/RA/weather_data")
+
+download.file("ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-history.csv",
+              "isd_weather_station_history.csv")
+              
+weather.stations <- read.csv("isd_weather_station_history.csv")
+head(weather.stations)
+```
+<br>
+For convenience, we'll change the names of two columns
+<br>
+```{r NOAA: weather stations colnames, echo=TRUE}
+colnames(weather.stations)[c(3, 9)] <- c("NAME", "ELEV")
+```
+<br>
+We're going to be using the Latitude and Longitude information to find weather stations closest to different cities, so we're going to eliminate the station in this dataset that have NA values in either LAT or LON column.
+
+The amount of data that is lost is minimal, approximately 1,300 observations out of 29,000.
+<br>
+```{r NOAA: remove NAs, echo=TRUE}
+weather.stations <- weather.stations[!is.na(weather.stations$LAT) &
+                                       !is.na(weather.stations$LON),]
+```
+<br> 
+Now we'll create a list of cities that we want to find weather stations for.  Once we create the list, we'll use the `geocodes()` function in the `ggmap` package to get each city's LAT and LON coordiates. 
+
+We'll use a few cities in the table of the World's Fastest Growing Cities mentioned above.
+<br>
+```{r NOAA: get cities, echo=TRUE, message=FALSE}
+cities.of.interest <- c("Samut Prakan, Thailand",
+                        "Can Tho, Viet Nam",
+                        "Mogadishu, Somalia")
+
+coordinates.of.interest <- geocode(cities.of.interest)
+```
+<br>
+Using the `get.knnx()` function in the `FNN` package, we'll find the k-nearest weather stations to the geocode that we just acquired.
+<br>
+```{r NOAA: KNN, echo=TRUE, message=FALSE}
+k.nearest.stations <- function(city, k)
+{
+  coordinates.of.interest <- geocode(city)
+  nearest.stations <- get.knnx(as.matrix(weather.stations[,c(8,7)]),
+                               as.matrix(coordinates.of.interest), k)
+  
+  stations.of.interest <- weather.stations[nearest.stations$nn.index[,],]
+  
+  stations.of.interest$rank <- rep(seq(from=1,to=nrow(coordinates.of.interest),by=1),
+                                   nrow(stations.of.interest)/
+                                     nrow(coordinates.of.interest))
+  
+  stations.of.interest$city <- rep(city,
+                                   nrow(stations.of.interest)/
+                                     nrow(coordinates.of.interest))
+  
+  stations.of.interest <- stations.of.interest[order(stations.of.interest$city),]
+  
+  stations.of.interest$BEGIN_Date <- as.numeric(substr(stations.of.interest$BEGIN,1,4))
+  stations.of.interest$END_Date <- as.numeric(substr(stations.of.interest$END, 1, 4))
+  
+  assign("stations.of.interest", stations.of.interest, envir = .GlobalEnv) 
+}
+
+k.nearest.stations(cities.of.interest, 5)
+```
+<br> 
+If interested, we can check to see how close the weather stations are to our city's reference point. 
+
+In the following map, the black dot represents our central point for the city, and the red dots represent the k-nearest weather stations. 
+<br>
+```{r NOAA: Plot map1, echo=TRUE, message=FALSE}
+map <- get_map(location = cities.of.interest[1], zoom = 10)
+````
+
+```{r NOAA: Plot map2, echo=TRUE, message=FALSE}
+ggmap(map) + 
+  geom_point(aes(x = LON, y = LAT), 
+             data = stations.of.interest[11:15,], 
+             colour="red", size=7, alpha=.5) +
+  geom_point(aes(x = lon, y = lat), 
+             data = geocode(cities.of.interest[1]), 
+             colour="black", size=7, alpha=.5)
+```
+
